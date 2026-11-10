@@ -1,0 +1,63 @@
+name: make-video
+
+on:
+  workflow_dispatch:
+    inputs:
+      script_text:
+        description: "台本(文をスラッシュ / で区切る)。空なら script.txt を使う"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      VOICEVOX_VERSION: "0.26.1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-noto-cjk p7zip-full
+          pip install numpy pillow
+
+      - name: Cache VOICEVOX engine
+        id: cache-engine
+        uses: actions/cache@v4
+        with:
+          path: engine
+          key: voicevox-engine-linux-cpu-x64-${{ env.VOICEVOX_VERSION }}
+
+      - name: Download VOICEVOX engine
+        if: steps.cache-engine.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p engine && cd engine
+          curl -fL -o engine.7z.001 "https://github.com/VOICEVOX/voicevox_engine/releases/download/${VOICEVOX_VERSION}/voicevox_engine-linux-cpu-x64-${VOICEVOX_VERSION}.7z.001"
+          7z x -y -bso0 -bsp0 engine.7z.001
+          rm engine.7z.001
+
+      - name: Prepare script
+        env:
+          SCRIPT_TEXT: ${{ inputs.script_text }}
+        run: |
+          if [ -n "$SCRIPT_TEXT" ]; then
+            printf '%s' "$SCRIPT_TEXT" | tr '/' '\n' > script.txt
+          fi
+          cat script.txt
+
+      - name: Start engine and make video
+        run: |
+          chmod +x engine/linux-cpu-x64/run
+          engine/linux-cpu-x64/run --host 127.0.0.1 --port 50021 > engine.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -s -m 2 http://127.0.0.1:50021/version > /dev/null && break
+            sleep 3
+          done
+          python make_video.py script.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: video
+          path: output/video.mp4
